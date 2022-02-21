@@ -51,8 +51,21 @@
      - Connection 是代表的是实际的 TCP 连接，通过复用多个 Channel 来同时传输不同数据。由于Channel只是单向的，所以两个反向 Channel 组成了一个 Session，从而一个 Connection 可以使用多个 Session 来同一时刻传输不同的数据。
      - Connection，Session, Channel 都是 Frame 层面的概念，而 Link 则是 Messge 层面的概念，Link 需要 attached 到一个 Connection/Session 来传输，所以一个Connection/Session 上可能存在有多个Links来复用传输信息 。
   
+## SASL 和 SSL/TSL 协议
+1. SSL/TSL 协议
+   - SSL (Secure Socket Layer 安全套接层) 是一种间于传输层和应用层的协议。起初是 HTTP 在传输数据时使用的是明文（虽然说POST提交的数据时放在报体里看不到的，但是还是可以通过抓包工具窃取到）是不安全的，因而推出了 SSL 来保证传输时候的数据安全，所以HTTPS是 HTTP + SSL/TCP 的简称。
+   - SSL 的基本思想是用非对称加密来建立链接（握手阶段），用对称加密来传输数据（传输阶段）。这样既保证了密钥分发的安全，也保证了通信的效率(因为非对称加密更耗时)。
+   - TSL (Transport Layer Security 安全传输层协议) 在SSL更新到3.0时，IETF对SSL3.0进行了标准化，并添加了少数机制(但是几乎和SSL3.0无差异)，标准化后的IETF更名为TLS1.0，可以说TLS就是SSL的新版本3.1。
+   
+2. SASL 协议
+   - SASL (Simple Authentication and Security Layer 简单认证与安全层) 一个在网络协议中用来认证和数据加密的构架。具体实现可以有多种，包括 "PLAIN"，"DIGEST-MD5"，"GSSAPI" 等。
 
-  
+3. SASL 与 SSL/TSL 区别
+   - SASL 用于认证
+   - SSL/TSL 用于对传输的数据进行加密
+
+Refer：[数据动态安全协议综述](https://silvermissile.github.io/2020/08/16/%E6%95%B0%E6%8D%AE%E5%8A%A8%E6%80%81%E5%AE%89%E5%85%A8%E5%8D%8F%E8%AE%AE%E7%BB%BC%E8%BF%B0/)
+
 ## Proton-J
 
 Reactor
@@ -65,3 +78,5 @@ Event
 - 
 
 Delivery
+
+Transport
