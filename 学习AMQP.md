@@ -110,6 +110,68 @@
      ```
 
 
+## Framing
+
+1. 组成
+   - frame header 
+     - 大小 8 bytes
+     - SIZE: header 前4个字节，标明 frame 整个字节数大小, 无符号 32 位整型
+     - DOFF：header 第5个字节，用于标志frame body 的位置（位置是DOFF值的大小再乘以4的字节数），无符号 8 位整型
+     - TYPE： header 的第6个字节，标明type code, 其中 0x00 表示是 AMQP frame, 0x01 表示是 SASL frame。
+     - TYPE-SPECIFIC： header的7和8字节，
+       - 对于 AMQP frame, 该位置是CHANNEL NUMBER。
+   - extended header 
+     - 大小 (DOFF * 4 - 8) bytes，去掉header的8 bytes
+     - TYPE-SPECIFIC
+       - 对于AMQP frame，直接忽略该段内容
+   - frame body
+     - TYPE-SPECIFIC
+       - 对于AMQP frame，body的开头部分是PERFORMATIVE信息（Open/Begin/Attach/..）
+
+2. AMQP frame
+   ```
+
+                 type: 0x00 - AMQP frame
+
+              +0       +1       +2       +3
+          +-----------------------------------+ -.
+        0 |                SIZE               |  |
+          +-----------------------------------+  |---> Frame Header
+        4 |  DOFF  |  TYPE  |     CHANNEL     |  |      (8 bytes)
+          +-----------------------------------+ -'
+          +-----------------------------------+ -.
+        8 |                ...                |  |
+          .                                   .  |---> Extended Header
+          .             <IGNORED>             .  |  (DOFF * 4 - 8) bytes
+          |                ...                |  |
+          +-----------------------------------+ -'
+          +-----------------------------------+ -.
+   4*DOFF |           PERFORMATIVE:           |  |
+          .      Open / Begin / Attach        .  |
+          .   Flow / Transfer / Disposition   .  |
+          .      Detach / End / Close         .  |
+          |-----------------------------------|  |
+          .                                   .  |---> Frame Body
+          .                                   .  |  (SIZE - DOFF * 4) bytes
+          .             PAYLOAD               .  |
+          .                                   .  |
+          .                           ________|  |
+          |                ...       |           |
+          +--------------------------+          -' 
+   ```
+
+## Connection
+
+## Session
+
+> Messages transferred on a link are sequentially identified within the session. A session can be viewed as multiplexing link traffic, much like a connection multiplexes session traffic. However, unlike the sessions on a connection, links on a session are not entirely independent since they share a common delivery sequence scoped to the session. This common sequence allows endpoints to efficiently refer to sets of deliveries regardless of the originating link. This is of particular benefit when a single application is receiving messages along a large number of different links. In this case the session provides aggregation of otherwise independent links into a single stream that can be efficiently acknowledged by the receiving application
+
+多个Link 复用同一个Session 来有效的传输数据，这些Link 在Session上并不是完全独立的，因为他们都用了相同的delivery sequence，从而Session 只需要关注传输部分，使得传输更有效率
+
+
+End Session：
+Sessions end automatically when the connection is closed or interrupted. Sessions are explicitly ended when either endpoint chooses to end the session.
+
 ## SASL 和 SSL/TSL 协议
 1. SSL/TSL 协议
    - SSL (Secure Socket Layer 安全套接层) 是一种间于传输层和应用层的协议。起初是 HTTP 在传输数据时使用的是明文（虽然说POST提交的数据时放在报体里看不到的，但是还是可以通过抓包工具窃取到）是不安全的，因而推出了 SSL 来保证传输时候的数据安全，所以HTTPS是 HTTP + SSL/TCP 的简称。
@@ -126,17 +188,3 @@
 Refer：[数据动态安全协议综述](https://silvermissile.github.io/2020/08/16/%E6%95%B0%E6%8D%AE%E5%8A%A8%E6%80%81%E5%AE%89%E5%85%A8%E5%8D%8F%E8%AE%AE%E7%BB%BC%E8%BF%B0/)
 
 
-## Proton-J
-
-Reactor
-
-
-Selector 
-
-Event
-- type
-- 
-
-Delivery
-
-Transport
