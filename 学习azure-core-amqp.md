@@ -299,7 +299,7 @@ protected AmqpChannelProcessor<RequestResponseChannel> createRequestResponseChan
 
 ## AmqpChannelProcessor
 
-`AmqpChannelProcessor` 扩展了 Mono 所以可以被subscribe，然后实现了Proccesor，从而可以作为 channel 的中间处理过程，对生成的channel增加相应的方法。
+`AmqpChannelProcessor` 扩展了 Mono 所以可以被subscribe，然后实现了Proccesor，从而可以作为 channel 的中间处理过程，对生成的channel增加相应的方法。目的是监控channel的创建状态，一旦创建成功，可以同时通知所有的下游订阅。
 
 ```Java
 public class AmqpChannelProcessor<T> extends Mono<T> implements Processor<T, T>, CoreSubscriber<T>, Disposable
@@ -325,38 +325,63 @@ public AmqpChannelProcessor(String fullyQualifiedNamespace, String entityPath,
 
 ### subscribe
 
-传入一个 `CoreSubscriber` 的对象, 然后注册在新建的 `ChannelSubscriber` 上面
+传入一个 `CoreSubscriber` 的对象 `actual`, 订阅到这个 `AmqpChannelProcessor` 对象上，可以理解actual 就是下游。
 
 ```Java
 public void subscribe(CoreSubscriber<? super T> actual) {
-    if (isDisposed()) {
-        if (lastError != null) {
-            actual.onSubscribe(Operators.emptySubscription());
-            actual.onError(lastError);
-        } else {
-            Operators.error(actual, logger.logExceptionAsError(new IllegalStateException(
-                String.format("namespace[%s] entityPath[%s]: Cannot subscribe. Processor is already terminated.",
-                    fullyQualifiedNamespace, entityPath))));
-        }
+ ...
+}
+```
+
+如果`AmqpChannelProcessor` 对象出现了问题，`isDisposed()` 会返回false，这样下游`actual` `emptySubscription` 上，并 emit 一个 error 给 `actual`。
+
+```Java
+if (isDisposed()) {
+    if (lastError != null) {
+        actual.onSubscribe(Operators.emptySubscription());
+        actual.onError(lastError);
+    } else {
+        Operators.error(actual, logger.logExceptionAsError(new IllegalStateException(
+            String.format("namespace[%s] entityPath[%s]: Cannot subscribe. Processor is already terminated.",
+                fullyQualifiedNamespace, entityPath))));
+    }
+    return;
+}
+```
+
+如果`AmqpChannelProcessor` 对象正常， 那么会用 `actual` 和 `this` 去创建一个 `ChannelSubscriber`。`ChannelSubscriber` 是个 private 的内部类，目的是包装每个注册在`ChannelSubscriber` 上的下游`actual`，当有收到新建的channel后，就通知所有的下游。 这里虽然叫 `subscriber`，但其实可以理解是 `actual` 的 `publisher`, 是下游的真正数据源。
+```Java
+final ChannelSubscriber<T> subscriber = new ChannelSubscriber<T>(actual, this);
+actual.onSubscribe(subscriber);
+```
+
+注意：这里虽然使用的是new，但是因为传入的是 `this`, 所以维护的是同一个 `processor`，只不过根据 `actual`的多少，相应生成多个 `ChannelSubscriber`。 这里的 `subscriber` 是对 `processor` 而言的, 对 `actual` 可以理解成 `publisher` （或者 `subscription`，因为可以`onSubscriber()`）。
+
+下游订阅好 `subscriber` 后，就去判断 `currentChannel` 是否存在。
+
+如果 `currentChannel` 不为空，说明 `channel` 已经通知过了，需要直接调用`subscriber` 发出 `complete`消息，通知到上面所有的`actual`。
+
+```Java
+synchronized (lock) {
+    if (currentChannel != null) {
+        subscriber.complete(currentChannel);
         return;
-    }
-
-    final ChannelSubscriber<T> subscriber = new ChannelSubscriber<T>(actual, this);
-    actual.onSubscribe(subscriber);
-
-    synchronized (lock) {
-        if (currentChannel != null) {
-            subscriber.complete(currentChannel);
-            return;
-        }
-    }
-
-    subscribers.add(subscriber);
-    logger.verbose("namespace[{}] entityPath[{}] subscribers[{}]: Added a subscriber.",
-        fullyQualifiedNamespace, entityPath, subscribers.size());
-
-    if (!isRetryPending.get()) {
-        requestUpstream();
     }
 }
 ```
+如果 `currentChannel` 为空，就把 `subscriber` 就加入 `Processor` 的 `subscribers` 里面存储起来, 等待 `onNext()` 消息，再通知。这里还额外判断 如果`Processor` 不是在 `retryPending` 过程中，就去 `requestUpstream()`，设置 `subscription.request(1)`。
+
+```Java
+subscribers.add(subscriber);
+logger.verbose("namespace[{}] entityPath[{}] subscribers[{}]: Added a subscriber.",
+    fullyQualifiedNamespace, entityPath, subscribers.size());
+
+if (!isRetryPending.get()) {
+    requestUpstream();
+}
+```
+
+理解一下就是 `channel` 不为空就是晚到了，前面通知过了，额外单独再通知一下。否则，就得等到 `channel` 好了，大家一起被通知。
+
+
+
