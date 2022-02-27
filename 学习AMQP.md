@@ -168,9 +168,18 @@
 
 多个Link 复用同一个Session 来有效的传输数据，这些Link 在Session上并不是完全独立的，因为他们都用了相同的delivery sequence，从而Session 只需要关注传输部分，使得传输更有效率
 
+1. Sessions 的建立过程 
+- 生成 session endpoint
+- 分配一个未被使用的channel number
+- 发送 begin 来匹配到对应 session endpoint 的outgoing channel
+
 
 End Session：
 Sessions end automatically when the connection is closed or interrupted. Sessions are explicitly ended when either endpoint chooses to end the session.
+
+## Links
+
+link handles - 每个link endpoint 都会被分到一个numeric handle，用于链接该link在session中传输的所有 frames。 两个endpoint 可以选择使用不同的handle。
 
 ## SASL 和 SSL/TSL 协议
 1. SSL/TSL 协议
