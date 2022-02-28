@@ -1,16 +1,18 @@
 # 学习 azure-core-amqp 项目
 
 - [学习 azure-core-amqp 项目](#学习-azure-core-amqp-项目)
-  - [ReactorConnection](#reactorconnection)
+  - [# ReactorConnection](#-reactorconnection)
     - [Constructor](#constructor)
     - [getOrCreateConnection](#getorcreateconnection)
     - [createSession](#createsession)
+    - [getClaimsBasedSecurityNode](#getclaimsbasedsecuritynode)
+    - [getOrCreateCBSNode](#getorcreatecbsnode)
     - [createRequestResponseChannel](#createrequestresponsechannel)
-  - [AmqpChannelProcessor](#amqpchannelprocessor)
+  - [#AmqpChannelProcessor](#amqpchannelprocessor)
     - [Constructor](#constructor-1)
     - [subscribe](#subscribe)
 
-## ReactorConnection
+## # ReactorConnection
 
 
 ### Constructor
@@ -264,10 +266,47 @@ public Mono<AmqpSession> createSession(String sessionName) {
 ```
 该部分逻辑与创建 Connection 时 block 到 ACTIVE 的逻辑相同。唯一区别是这里增加了一个 `SessionSubscription` 对象来保存 `session` 和对应的 `subscription`, 这是因为 Connection 只有一个，保存在当前对象的私有对象里。而 Session 是有多个的，需要组成一个整体，保存在 `sessionMap` 里。
 
+### getClaimsBasedSecurityNode
+
+ClaimsBasedSecurityNode 用于 authorization。 当 connection 生成后（新建且变为ACTIVE），就会调用 `getOrCreateCBSNode()` 返回 `ClaimsBasedSecurityNode` 对象。从而下游可以拿来进行验证。
+
+```Java
+public Mono<ClaimsBasedSecurityNode> getClaimsBasedSecurityNode() {
+    return connectionMono.then(Mono.fromCallable(() -> getOrCreateCBSNode()));
+}
+```
+- `then()` block 直到上游返回后，返回 另一个`Mono` 对象。
+
+ClaimsBasedSecurityNode 用处：
+
+-  `getManagementNode()` 调用 `getClaimsBasedSecurityNode` 传入 `AzureTokenManagerProvider` 构造函数，生成 `tokenManager` 用于 `authorize()`。这里还把 `tokenManager` 传入了 `ManagementChannel` 用于发送 `Management` 消息时候 `authorize()`。
+-  `createSession()` 调用 `getClaimsBasedSecurityNode` 传入 `ReactorSession` 的构造函数中，在 `ReactorSession` 里面用于会生成 `tokenManager` 进行 `authorized()`。
+
+### getOrCreateCBSNode
+
+
+```Java
+private synchronized ClaimsBasedSecurityNode getOrCreateCBSNode() {
+  if (cbsChannel == null) {
+      logger.info("Setting CBS channel.");
+      cbsChannelProcessor = createRequestResponseChannel(CBS_SESSION_NAME, CBS_LINK_NAME, CBS_ADDRESS);
+      cbsChannel = new ClaimsBasedSecurityChannel(
+          cbsChannelProcessor,
+          connectionOptions.getTokenCredential(), connectionOptions.getAuthorizationType(),
+          connectionOptions.getRetry());
+  }
+
+  return cbsChannel;
+}
+```
+1. 如果 `this.cbschannel` 不存在情况下才会去创建，也就是说一个 `ReactorConnection` 里面只包含一个 CBS channel。
+2. 先创建一个 `this.cbsChannelProcessor`，传入固定的cbs session，link 和 address。调用 `createRequestResponseChannel` 就是建立 client 和 CBS Node 的双向连接 channel，实际`cbsChannelProcessor` 包含先创建 cbs session，再对应创建 `RequestResponseChannel` 并且这个channel生成后，会传递给 `AmqpChannelProcessor`，在去通知相应的下游。
+3. 然后把这个 `cbsChannelProcessor` 作为 `Mono<RequestResponseChannel>` 参数，新建一个 `ClaimsBasedSecurityChannel` 对象 `cbsChannel`，这样所有调用下游会到CBS node节点建立后，再进行验证。  
+   
+
 ### createRequestResponseChannel
 
-`createRequestResponseChannel` 构建了client 与 message broker 之间的
-双向连接（link）。需要传入参数是 `sessionName` (不存在就构建新的session), `linkName`, 和 `entityPath`(message broker 的地址)。
+`createRequestResponseChannel` 构建了client 与 message broker 之间的双向连接 `RequestResponseChannel`。需要传入参数是 `sessionName` (不存在就构建新的session), `linkName`, 和 `entityPath`(message broker 的地址)。
 
 ```Java
 protected AmqpChannelProcessor<RequestResponseChannel> createRequestResponseChannel(String sessionName, String linkName, String entityPath) {
@@ -295,11 +334,13 @@ protected AmqpChannelProcessor<RequestResponseChannel> createRequestResponseChan
 - `doOnNext()` 增加 `onNext()` 时候额外的log信息，用于记录channel 已经创建并emit了。
 - `repeat()` 使得 `Mono` 对象转换成了 `Flux` 对象。可以在Session上不断的创建新的 Channel。
 - `subscribeWith()` 订阅了创建的createChannel，并对应生成一个新的 `AmqpChannelProcessor` （Processor extends Subscriber）对相应生成的channel 增加相应的处理逻辑，并最后把这个 `AmqpChannelProcessor` 返回。 
+  
+这里的上游是`createChannel`，也就是`createSession()`后，每获得一个session（无论返回已有，还是新建的），都会对应生成一个新的 `RequestResponseChannel` 对象。这个`RequestResponseChannel` 对象就作为 `AmqpChannelProcessor` 的上游，一旦生成就会调用 Proccessor 的 `onNext()` 方法传入 `RequestResponseChannel` 对象进去。
 
 
-## AmqpChannelProcessor
+## #AmqpChannelProcessor
 
-`AmqpChannelProcessor` 扩展了 Mono 所以可以被subscribe，然后实现了Proccesor，从而可以作为 channel 的中间处理过程，对生成的channel增加相应的方法。目的是监控channel的创建状态，一旦创建成功，可以同时通知所有的下游订阅。
+`AmqpChannelProcessor` 扩展了 Mono 所以可以被subscribe，然后实现了Proccesor，从而可以作为 channel 的中间处理过程，对生成的channel增加相应的方法。目的是监控channel的创建状态，一旦创建成功，可以同时通知所有的下游订阅。`AmqpChannelProcessor` 的上游都是是通过 `subscribeWith()` 方法实现连接的，所以要看是哪个对象使用了 `subscribeWith()` 就是 Processor 的上游。
 
 ```Java
 public class AmqpChannelProcessor<T> extends Mono<T> implements Processor<T, T>, CoreSubscriber<T>, Disposable
