@@ -11,6 +11,14 @@
   - [#AmqpChannelProcessor](#amqpchannelprocessor)
     - [Constructor](#constructor-1)
     - [subscribe](#subscribe)
+  - [#Handler](#handler)
+  - [#ConnectionHandler](#connectionhandler)
+  - [#SessionHandler](#sessionhandler)
+  - [#SendLinkHandler](#sendlinkhandler)
+  - [#ReceiveLinkHandler](#receivelinkhandler)
+  - [#ReactorHandler](#reactorhandler)
+  - [#CustomIOHandler](#customiohandler)
+  - [#DispatcherHandler](#dispatcherhandler)
 
 ## # ReactorConnection
 
@@ -425,4 +433,83 @@ if (!isRetryPending.get()) {
 理解一下就是 `channel` 不为空就是晚到了，前面通知过了，额外单独再通知一下。否则，就得等到 `channel` 好了，大家一起被通知。
 
 
+## #Handler
 
+`Handler` 是 `ConnectionHandler`, `SessionHandler` 和 `LinkHandler` 的抽象类，保存了 `connectionId` 消息，主要是用于生成 `endpointStates` 的源。
+
+```Java
+public abstract class Handler extends BaseHandler implements Closeable {
+    private final AtomicBoolean isTerminal = new AtomicBoolean();
+    private final Sinks.Many<EndpointState> endpointStates = Sinks.many().replay()
+        .latestOrDefault(EndpointState.UNINITIALIZED);
+    private final String connectionId;
+    private final String hostname;
+```
+主要是共用了 `endpointStates`, 通过 `getEndpointStates` 返回。 并且当调用 `Handler#onNext()`, `Handler#onError()` 和 `Handler#close()` 方法时候，会自动 emit 对应的状态出来，从而通知监听 `endpointState` 的下游。
+
+```Java
+public Flux<EndpointState> getEndpointStates() {
+    return endpointStates.asFlux().distinctUntilChanged();
+}
+```
+- distinctUntilChanged() 保证了只有当跟之前的状态不同时候，才会发出消息。
+- 如果使用 distinct(), 由于它会 cache 之前所有的值，然后只会出现不同的值的时候才会 `emit()`。
+
+## #ConnectionHandler
+
+ConnectionHandler 继承了 Handler 类，从而具有了获取 endpointStates 状态。 同时，内部实现主要控制了 
+
+```Java
+public class ConnectionHandler extends Handler {
+    public static final int AMQPS_PORT = 5671;
+    static final int MAX_FRAME_SIZE = 65536;
+    static final int CONNECTION_IDLE_TIMEOUT = 60_000; 
+}
+```
+- 最大frame size 是 65536, 2^16
+- Connection 的 idle timeout 时间是 60s
+
+ConnectionHandler 增加了一个 addTransportLayers 的函数，用于 WebSocket.
+
+```Java
+protected void addTransportLayers(Event event, TransportInternal transport) {
+
+}
+```
+
+然后就是重写 Handler (Proton-J BaseHandler)的函数：
+- onConnectionInit 
+  - 初始化Connection 对象
+  - 配置 Properties
+  - 开启 `connection.open()`
+- onConnectionBound 
+  - 连接 Connection 
+  - 调用 `this.addTransportLayers(event, (TransportInternal) transport)` 添加 transport 层
+  - 连接后，控制 emit remote state `Handler#onNext(connection.getRemoteState())`
+- onConnectionUnbound
+  - 断开 Connection 连接
+  - 调用`Handler#close()`
+- onTransportError
+  - 处理Tranport 出问题的事件
+  - ` transport.unbind()`
+- onTransportClosed
+- onConnectionLocalOpen
+- onConnectionRemoteOpen
+  - 继续 emit remote state `Handler#onNext(connection.getRemoteState())`
+- onConnectionLocalClose
+  - 判断是不是 remote close
+- onConnectionRemoteClose
+- onConnectionFinal
+  - `Handler#onNext(EndpointState.CLOSED)`
+  - `Handler#close()`
+
+## #SessionHandler
+
+## #SendLinkHandler
+
+## #ReceiveLinkHandler
+
+## #ReactorHandler
+
+## #CustomIOHandler
+## #DispatcherHandler
