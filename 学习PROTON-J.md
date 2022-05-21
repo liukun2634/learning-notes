@@ -26,10 +26,17 @@
 
 ## Qpid Proton-J 项目
 
+### Reactor
+
+ReactorChild
+- Endpoint
+- Selectable (用于存储selectableChannel，并用于判断是否可读可写)
+- Acceptor (Connection 建立之前的)
+
+### Endpoint
 
 EndpointImpl implement ProntonJEndpoint
 
-实现：
 - Connection
 - Transport
 - Session
@@ -39,4 +46,24 @@ EndpointImpl implement ProntonJEndpoint
 
 #### Transport
 
-封装了
+用于从buffer中读取和写入数据，交给socketChannel 发送和接收。
+
+
+#### Connection
+
+session(ArrayList)
+- sender(HashMap) -- Link
+- receiver(HashMap) -- Link
+- collector(list of events, head, tail)
+
+### Selectable
+
+Selectable 存储于 Selector 之中, 用 hashset 保存多个。
+
+
+## Log
+
+Frame trace 
+- Enable: set environment varibale `PN_TRACE_FRM=true`
+
+
